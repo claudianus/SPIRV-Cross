@@ -8862,8 +8862,42 @@ string CompilerMSL::to_ptr_expression(uint32_t id, bool register_expression_read
 	auto *e = maybe_get<SPIRExpression>(id);
 	auto expr = enclose_expression(e && e->need_transpose ? e->expression : to_expression(id, register_expression_read));
 	if (!should_dereference(id))
-		expr = address_of_expression(expr);
+		expr = bda_array_pointer_cast(id, address_of_expression(expr));
 	return expr;
+}
+
+// BDA pointers to arrays are declared as spvUnsafeArray<T, N>* (type_to_glsl
+// emits the templated wrapper for physical pointers), but "&member" on a
+// physical-layout C array member yields T(*)[N]. Reinterpret the address to
+// the canonical pointer type so pointer-typed expressions stay consistent.
+string CompilerMSL::bda_array_pointer_cast(uint32_t id, const string &expr)
+{
+	if (expr.empty() || expr.front() != '&')
+		return expr;
+	auto &type = expression_type(id);
+	if (!is_physical_pointer(type) || type.parent_type == 0 || get_pointee_type(type).array.empty())
+		return expr;
+	return join("reinterpret_cast<", type_to_glsl(type, id), ">", enclose_expression(expr));
+}
+
+string CompilerMSL::to_pointer_expression(uint32_t id, bool register_expression_read)
+{
+	auto &type = expression_type(id);
+	if (is_pointer(type) && expression_is_lvalue(id) && !should_dereference(id))
+		return bda_array_pointer_cast(
+		    id, address_of_expression(to_enclosed_expression(id, register_expression_read)));
+	else
+		return to_unpacked_expression(id, register_expression_read);
+}
+
+string CompilerMSL::to_enclosed_pointer_expression(uint32_t id, bool register_expression_read)
+{
+	auto &type = expression_type(id);
+	if (is_pointer(type) && expression_is_lvalue(id) && !should_dereference(id))
+		return bda_array_pointer_cast(
+		    id, address_of_expression(to_enclosed_expression(id, register_expression_read)));
+	else
+		return to_enclosed_unpacked_expression(id, register_expression_read);
 }
 
 void CompilerMSL::emit_binary_unord_op(uint32_t result_type, uint32_t result_id, uint32_t op0, uint32_t op1,

@@ -919,6 +919,9 @@ protected:
 	void emit_texture_op(const Instruction &i, bool sparse) override;
 	void emit_binary_ptr_op(uint32_t result_type, uint32_t result_id, uint32_t op0, uint32_t op1, const char *op);
 	std::string to_ptr_expression(uint32_t id, bool register_expression_read = true);
+	std::string to_pointer_expression(uint32_t id, bool register_expression_read = true) override;
+	std::string to_enclosed_pointer_expression(uint32_t id, bool register_expression_read = true) override;
+	std::string bda_array_pointer_cast(uint32_t id, const std::string &expr);
 	void emit_binary_unord_op(uint32_t result_type, uint32_t result_id, uint32_t op0, uint32_t op1, const char *op);
 	void emit_instruction(const Instruction &instr) override;
 	void emit_glsl_op(uint32_t result_type, uint32_t result_id, uint32_t op, const uint32_t *args,
