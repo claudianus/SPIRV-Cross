@@ -35,6 +35,14 @@ using namespace std;
 static const uint32_t k_unknown_location = ~0u;
 static const uint32_t k_unknown_component = ~0u;
 static const char *force_inline = "static inline __attribute__((always_inline))";
+static const char *no_force_inline = "static __attribute__((noinline))";
+
+// Functions larger than this (in SPIR-V instructions) are emitted as plain static instead of
+// force-inline. always_inline is handled by Metal's mandatory AlwaysInliner pass, which clones
+// the callee into every call site regardless of cost; on very large kernels this exhausts
+// MTLCompilerService memory. Plain static keeps internal linkage (satisfying the Metallib
+// requirement) while letting LLVM's cost-bounded inliner decide.
+static const uint32_t k_max_force_inline_insts = 512;
 
 CompilerMSL::CompilerMSL(std::vector<uint32_t> spirv_)
     : CompilerGLSL(std::move(spirv_))
@@ -10780,7 +10788,10 @@ void CompilerMSL::emit_instruction(const Instruction &instruction)
 		if (opcode != OpBitcast || is_pointer(type) || is_pointer(input_type))
 		{
 			string op;
-			auto input_expr = to_unpacked_expression(ops[2]);
+			// Pointer inputs may be access-chain lvalues (e.g. _58[_59]); emit the
+			// pointer form (&_58[_59]) rather than the dereferenced object, which
+			// would produce an invalid object->pointer/object->int reinterpret_cast.
+			auto input_expr = to_pointer_expression(ops[2]);
 
 			if ((type.vecsize == 1 || is_pointer(type)) && (input_type.vecsize == 1 || is_pointer(input_type)))
 				op = join("reinterpret_cast<", type_to_glsl(type), ">(", input_expr, ")");
@@ -12388,7 +12399,10 @@ void CompilerMSL::emit_function_prototype(SPIRFunction &func, const Bitset &)
 		}
 		if (!template_decl.empty())
 			statement(template_decl, ">");
-		statement(force_inline);
+		uint64_t func_inst_count = 0;
+		for (auto block_id : func.blocks)
+			func_inst_count += get<SPIRBlock>(block_id).ops.size();
+		statement(func_inst_count > k_max_force_inline_insts ? no_force_inline : force_inline);
 	}
 
 	auto &type = get<SPIRType>(func.return_type);
@@ -16523,7 +16537,11 @@ string CompilerMSL::argument_decl(const SPIRFunction::Parameter &arg)
 	if (arg.alias_global_variable && var.basevariable)
 		name_id = var.basevariable;
 
-	bool constref = !arg.alias_global_variable && !passed_by_value && is_pointer(var_type) && arg.write_count == 0;
+	// Arrays of pointers must not get a const-qualified element type:
+	// "const device T* (&)[N]" cannot bind a caller's "device T* [N]"
+	// (T** -> const T** is not a legal qualification conversion).
+	bool constref = !arg.alias_global_variable && !passed_by_value && is_pointer(var_type) &&
+	                arg.write_count == 0 && !type_is_array_of_pointers(data_type);
 	// Framebuffer fetch is plain value, const looks out of place, but it is not wrong.
 	// readonly coming from glslang is not reliable in all cases.
 	// For UBOs, readonly is implied, and for SSBOs we use global check.

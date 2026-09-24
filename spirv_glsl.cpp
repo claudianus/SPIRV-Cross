@@ -10949,7 +10949,14 @@ string CompilerGLSL::access_chain_internal(uint32_t base, const uint32_t *indice
 		if (should_dereference(base))
 			expr = dereference_expression(get<SPIRType>(type_id), expr);
 	}
-	else if (should_dereference(base) && type->basetype != SPIRType::Struct && !ptr_chain)
+	// Pointer-to-array bases need an explicit dereference: indexing "T (*p)[N]"
+	// as p[i] skips a level (pointer arithmetic on whole arrays) instead of
+	// selecting element i of *p. Arrays of structs report basetype == Struct,
+	// so the is_array check must come first; struct pointees keep -> member access.
+	// A zero-index chain appends nothing, so the raw pointer must be dereferenced
+	// regardless of pointee type to yield an lvalue.
+	else if (should_dereference(base) &&
+	         (count == 0 || is_array(*type) || type->basetype != SPIRType::Struct) && !ptr_chain)
 		expr = join("(", dereference_expression(*type, expr), ")");
 
 	bool access_chain_is_arrayed = expr.find_first_of('[') != string::npos;
@@ -17280,9 +17287,13 @@ string CompilerGLSL::to_array_size(const SPIRType &type, uint32_t index)
 
 string CompilerGLSL::type_to_array_glsl(const SPIRType &type, uint32_t)
 {
-	if (type.pointer && type.storage == StorageClassPhysicalStorageBuffer && type.basetype != SPIRType::Struct)
+	if (is_physical_pointer(type) && type.basetype != SPIRType::Struct)
 	{
 		// We are using a wrapped pointer type, and we should not emit any array declarations here.
+		// Use is_physical_pointer (opcode check) instead of the pointer flag: OpTypeArray
+		// copies the element SPIRType, so an array of PSB pointers inherits
+		// pointer=true + PSB storage, but the array dims belong to this type
+		// and must be emitted (e.g. "device uchar* arr[8]").
 		return "";
 	}
 
