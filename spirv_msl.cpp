@@ -8907,6 +8907,13 @@ string CompilerMSL::bda_array_pointer_cast(uint32_t id, const string &expr)
 	auto &type = expression_type(id);
 	if (!is_physical_pointer(type) || type.parent_type == 0 || get_pointee_type(type).array.empty())
 		return expr;
+	// Module-scope PhysicalStorageBuffer variables are emitted as program-scope
+	// 'constant' globals (the only global address space MSL supports). MSL
+	// forbids a direct constant->device pointer reinterpret, so route the cast
+	// through the address bits: device T*(ulong(&const_var)).
+	if (auto *var = maybe_get<SPIRVariable>(id); var && var->storage == StorageClassPhysicalStorageBuffer)
+		return join("reinterpret_cast<", type_to_glsl(type, id), ">(reinterpret_cast<ulong>",
+		            enclose_expression(expr), ")");
 	return join("reinterpret_cast<", type_to_glsl(type, id), ">", enclose_expression(expr));
 }
 
