@@ -8597,6 +8597,36 @@ void CompilerMSL::emit_resources()
 {
 	declare_constant_arrays();
 
+	// Module-scope PhysicalStorageBuffer variables (e.g. clspv
+	// -module-constants-in-storage-buffer output) hold initialized data at a
+	// fixed physical address, referenced via OpConvertPtrToU. Compiler only
+	// registers Private/Workgroup/Output storage in global_variables, so these
+	// variables would otherwise never be declared. Emit them as program-scope
+	// constants — the only global address space MSL allows; on the flat GPU
+	// address model &var is still a usable device pointer.
+	{
+		bool emitted = false;
+		// NB: no is_hidden_variable() filter — SPIR-V 1.4+ hides every global
+		// absent from OpEntryPoint's interface list, and PhysicalStorageBuffer
+		// data variables are never listed there (they are not interface
+		// resources), which is exactly the bug being fixed.
+		ir.for_each_typed_id<SPIRVariable>([&](uint32_t var_id, SPIRVariable &var) {
+			if (var.storage != StorageClassPhysicalStorageBuffer)
+				return;
+			auto &type = get_variable_data_type(var);
+			add_resource_name(var_id);
+			auto name = to_name(var_id);
+			string init = "{}";
+			if (var.initializer)
+				if (auto *c = maybe_get<SPIRConstant>(var.initializer))
+					init = constant_expression(*c);
+			statement(inject_top_level_storage_qualifier(variable_decl(type, name), "constant"), " = ", init, ";");
+			emitted = true;
+		});
+		if (emitted)
+			statement("");
+	}
+
 	// Emit the special [[stage_in]] and [[stage_out]] interface blocks which we created.
 	emit_interface_block(stage_out_var_id);
 	emit_interface_block(patch_stage_out_var_id);
